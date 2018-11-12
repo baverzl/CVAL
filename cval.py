@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 
+import os
+import sys
+
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtPrintSupport import *
-from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
-from PyQt5.QtMultimediaWidgets import QVideoWidget
+from PyQt5.QtMultimedia import *
+from PyQt5.QtMultimediaWidgets import *
 
 import pdb
 
@@ -15,40 +18,188 @@ import uuid
 
 import cv2
 
-class BoundingBox():
+class VideoWidgetSurface(QAbstractVideoSurface):
 
-    def __init__(self):
-        pass
+    def __init__(self, widget, parent=None):
+        super(VideoWidgetSurface, self).__init__(parent)
 
-class VideoDisplayWidget(QVideoWidget):
+        self.widget = widget
+        self.imageFormat = QImage.Format_Invalid
 
-    def __init__(self, mediaPlayer):
-        super(QVideoWidget, self).__init__()
+        self.is_drawing = False
+
+    def supportedPixelFormats(self, handleType=QAbstractVideoBuffer.NoHandle):
+        formats = [QVideoFrame.PixelFormat()]
+        if (handleType == QAbstractVideoBuffer.NoHandle):
+            for f in [QVideoFrame.Format_RGB32,
+                    QVideoFrame.Format_ARGB32,
+                    QVideoFrame.Format_ARGB32_Premultiplied,
+                    QVideoFrame.Format_RGB565,
+                    QVideoFrame.Format_RGB555
+                     ]:
+                formats.append(f)
+        return formats
+
+    def isFormatSupported(self, _format):
+        imageFormat = QVideoFrame.imageFormatFromPixelFormat(_format.pixelFormat())
+        size = _format.frameSize()
+        _bool = False
+        if (imageFormat != QImage.Format_Invalid and not
+            size.isEmpty() and
+            _format.handleType() == QAbstractVideoBuffer.NoHandle):
+            _bool = True
+        return _bool
+
+    def start(self, _format):
+        imageFormat = QVideoFrame.imageFormatFromPixelFormat(_format.pixelFormat())
+        size = _format.frameSize()
+        if (imageFormat != QImage.Format_Invalid and not size.isEmpty()):
+            self.imageFormat = imageFormat
+            self.imageSize = size
+            self.sourceRect = _format.viewport()
+            QAbstractVideoSurface.start(self, _format)
+            self.widget.updateGeometry()
+            self.updateVideoRect()
+            return True
+        else:
+            return False
+
+    def stop(self):
+        self.currentFrame = QVideoFrame()
+        self.targetRect = QRect()
+        QAbstractVideoSurface.stop(self)
+        self.widget.update()
+
+    def present(self, frame):
+        if (self.surfaceFormat().pixelFormat() != frame.pixelFormat() or
+            self.surfaceFormat().frameSize() != frame.size()):
+            self.setError(QAbstractVideoSurface.IncorrectFormatError)
+            self.stop()
+            return False
+        else:
+            self.currentFrame = frame
+            self.widget.repaint(self.targetRect)
+            return True
+
+    def videoRect(self):
+        return self.targetRect
+
+    def updateVideoRect(self):
+        size = self.surfaceFormat().sizeHint()
+        # boundedTo(): Returns a size holding the minimum width and height of this size and the given otherSize
+        size.scale(self.widget.size().boundedTo(size), Qt.KeepAspectRatio)
+        self.targetRect = QRect(QPoint(0, 0), size);
+        # center(): Returns the center point of the rectangle
+        # moveCenter(): Moves the rectangle, leaving the center point at the given position. The rectangle's size is unchanged.
+        self.targetRect.moveCenter(self.widget.rect().center())
+
+    def setBoundingBoxCoords(self, coords):
+        self.coords = coords
+        self.is_drawing = True
+
+    def paint(self, painter):
+        # Maps the contents of a video frame to system (CPU addressable) memory.
+        # Returns true if the frame was mapped to memory in the given mode and false otherwise
+
+        if (self.currentFrame.map(QAbstractVideoBuffer.ReadOnly)):
+            # Return the world transformation matrix.
+            oldTransform = painter.transform()
+
+        # Paint upside down
+        if (self.surfaceFormat().scanLineDirection() == QVideoSurfaceFormat.BottomToTop):
+            painter.scale(1, -1); # rotate according to x-axis
+            painter.translate(0, -self.widget.height()) # translate -widget.height
+
+        image = QImage(self.currentFrame.bits(),
+                        self.currentFrame.width(),
+                        self.currentFrame.height(),
+                        self.currentFrame.bytesPerLine(),
+                        self.imageFormat
+                        )
+
+        # Draws the rectangular portion source of the given image into the target rectangle in the paint device
+        painter.drawImage(self.targetRect, image, self.sourceRect)
+
+        # NOTE: The order of drawing is important.
+        if self.is_drawing:
+            self._color = QColor(100, 10, 40, 100)
+            brush = QBrush(self._color)
+            painter.setBrush(brush)
+            painter.drawRect(QRect(self.coords[0], self.coords[1]))
+            self.is_drawing = False
+
+        # Sets the world transformation matrix. If combine is true, the specified transform is combined with the current matrix; otherwise it replaces the current matrix.
+        painter.setTransform(oldTransform)
+
+        self.currentFrame.unmap()
+
+class VideoWidget(QWidget):
+
+    def __init__(self, mediaPlayer, parent=None):
+        super(VideoWidget, self).__init__(parent)
 
         self.begin = None
         self.end = None
 
+        #self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        #self.setAttribute(Qt.WA_PaintOnScreen, True)
+        palette = self.palette()
+        palette.setColor(QPalette.Background, Qt.black)
+        self.setPalette(palette)
+        self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.MinimumExpanding)
+        self.surface = VideoWidgetSurface(self)
+
         self.mediaPlayer = mediaPlayer
 
-#        self.setAlignment(Qt.AlignCenter)
-       
         self.show()
 
-    def paintEvent(self, event):
-        super(QVideoWidget, self).paintEvent(event)
+    def videoSurface(self):
+        return self.surface
 
-        if self.begin is None:
+    def closeEvent(self, event):
+        del self.surface
+
+    def sizeHint(self):
+        return self.surface.surfaceFormat().sizeHint()
+
+    def paintEvent(self, event):
+
+#        super(VideoWidget, self).paintEvent(event)
+
+        if self.begin is False:
             return
 
-        print(self.begin, self.end)
-        qp = QPainter(self)
-        br = QBrush(QColor(100, 10, 40, 100))
-        qp.setBrush(br)
-        qp.drawRect(QRect(self.begin, self.end))
+        painter = QPainter(self)
+        if (self.surface.isActive()):
+            videoRect = self.surface.videoRect()
+            # Qt 5: need to convert a rect to a region
+            videoRegion = QRegion(videoRect)
+            if not videoRect.contains(event.rect()):
+                region = event.region()
+                # Qt4 : region.subtract(videoRect) ; subtracting a rect from a region is possible, but not in Qt5
+                region -= videoRegion
+                # Qt4 : brush = self.palette().background()
+                brush = self.palette().brush(QPalette.Background)
+                painter.setBrush(brush)
+                for rect in region.rects():
+                    painter.drawRect(rect)
+            if self.mediaPlayer.state() == QMediaPlayer.PausedState:
+                self.surface.setBoundingBoxCoords((self.begin, self.end))
+            self.surface.paint(painter)
+        else:
+            painter.fillRect(event.rect(), self.palette().window())
 
+    def resizeEvent(self, event):
+        QWidget.resizeEvent(self, event)
+        self.surface.updateVideoRect()
+         
     def mousePressEvent(self, event):
-        self.begin = event.pos()
-        self.end = event.pos()
+
+        if event.button() == Qt.LeftButton:
+            self.begin = event.pos()
+            self.end = event.pos()
+
         self.update()
 
     def mouseMoveEvent(self, event):
@@ -56,8 +207,10 @@ class VideoDisplayWidget(QVideoWidget):
         self.update()
 
     def mouseReleasedEvent(self, event):
-        self.begin = event.pos()
-        self.end = event.pos()
+
+        if event.button() == Qt.LeftButton:
+            self.begin = event.pos()
+            self.end = event.pos()
         self.update()
 
     def wheelEvent(self, ev):
@@ -98,13 +251,9 @@ class cvalWindow(QMainWindow):
                         "The QMediaPlayer object does not have a valid service.\n"
                         "Please check the media service plugins are installed.")
 
-#        self.VideoDisplayPanel = VideoDisplayPanel()
-        self.videoWidget = VideoDisplayWidget(self.mediaPlayer)
-        #print(dir(self.videoWidget))
-#        self.videoWidget.setVisible(False)
-#        self.VideoDisplayPanel.setFrameShape(QFrame.StyledPanel)
+        self.videoWidget = VideoWidget(self.mediaPlayer)
 
-        self.mediaPlayer.setVideoOutput(self.videoWidget)
+        self.mediaPlayer.setVideoOutput(self.videoWidget.videoSurface())
 
         self.videoPlayPanel = QFrame()
         self.videoPlayPanel.setFrameShape(QFrame.StyledPanel)
@@ -195,7 +344,7 @@ class cvalWindow(QMainWindow):
   
 
     def openFile(self):
-        fileName, _ = QFileDialog.getOpenFileName(self, 'Open File', '', 'Video Files(*.avi *.mp4);;')
+        fileName, _ = QFileDialog.getOpenFileName(self, 'Open File', '', 'Video Files(*.avi *.mp4 *.webm);;')
 
         if fileName:
             self.mediaPlayer.setMedia(
@@ -215,10 +364,12 @@ class cvalWindow(QMainWindow):
 
     def play(self):
     
-        if self.mediaPlayer.state() == QMediaPlayer.StoppedState:
+        if self.mediaPlayer.state() == QMediaPlayer.PausedState:
             self.mediaPlayer.play()
         else:
             self.mediaPlayer.pause()
+
+        # StoppedState means the mediaPlayer reverts back to the origin.
 
     def seek(self, seconds):
         self.mediaPlayer.setPosition(seconds * 1000)

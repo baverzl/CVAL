@@ -1,0 +1,1 @@
+http://wiki.ros.org/rosbag/Tutorials/Exporting%20image%20and%20video%20data
