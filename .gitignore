@@ -1,4 +1,6 @@
 *.avi
 *.mp4
+*.pyc
+.idea/
 
 mot_benchmark

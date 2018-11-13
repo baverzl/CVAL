@@ -22,21 +22,6 @@ from caffe.proto import caffe_pb2
 
 from sort import Sort
 
-def get_labelname(labelmap, labels):
-    num_labels = len(labelmap.item)
-    labelnames = []
-    if type(labels) is not list:
-        labels = [labels]
-    for label in labels:
-        found = False
-        for i in xrange(0, num_labels):
-            if label == labelmap.item[i].label:
-                found = True
-                labelnames.append(labelmap.item[i].display_name)
-                break
-        assert found == True
-    return labelnames
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu_id', type=int, default=0)
@@ -71,12 +56,12 @@ if __name__ == '__main__':
     transformer = caffe.io.Transformer({'data': net.blobs['data'].data.shape})
     transformer.set_transpose('data', (2, 0, 1))
     transformer.set_mean('data', np.array([104, 117, 123]))  # mean pixel
-    #transformer.set_raw_scale('data', 255)  # the reference model operates on images in [0,255] range instead of [0,1]
+    #transformer.set_raw_scale('data', 255)  # the reference model operates on icons in [0,255] range instead of [0,1]
     #transformer.set_channel_swap('data', (2, 1, 0))  # the reference model has channels in BGR order instead of RGB
 
     mot_tracker = Sort()
 
-    # im_names = os.listdir('examples/images')
+    # im_names = os.listdir('examples/icons')
     num_classes = 32
     colors = plt.cm.hsv(np.linspace(0, 1, num_classes)).tolist()
 
